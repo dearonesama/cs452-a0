@@ -107,10 +107,10 @@ void test_train_command() {
   ASSERT(c.cmd.tr.train_num == 6);
   ASSERT(c.cmd.tr.speed = 9);
 
-  char str3[] = "rv  23";
+  char str3[] = "rv  03";
   c = try_parse_train_command(str3, BUFLEN(str3) - 1);
   ASSERT(c.kind == TRAIN_COMMAND_RV);
-  ASSERT(c.cmd.rv.train_num == 23);
+  ASSERT(c.cmd.rv.train_num == 3);
 
   char str4[] = "sw 32 S";
   c = try_parse_train_command(str4, BUFLEN(str4) - 1);
@@ -123,6 +123,9 @@ void test_train_command() {
   ASSERT(c.kind == TRAIN_COMMAND_SW);
   ASSERT(c.cmd.sw.switch_num == 1);
   ASSERT(!c.cmd.sw.straight);
+
+  c = try_parse_train_command("q", 1);
+  ASSERT(c.kind == TRAIN_COMMAND_Q);
 }
 
 int main() {

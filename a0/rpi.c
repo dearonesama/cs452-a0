@@ -253,9 +253,35 @@ static void uart_init_channel(size_t spiChannel, size_t uartChannel, size_t baud
 
 void init_uart(uint32_t spiChannel) {
   uart_write_register(spiChannel, 0, UART_IOControl, UART_IOControl_RESET); // resets both channels
-	uart_write_register(spiChannel, 1, UART_IOControl, UART_IOControl_RESET);
+  uart_write_register(spiChannel, 1, UART_IOControl, UART_IOControl_RESET);
   uart_init_channel(spiChannel, 0, 115200, 3/*0b 11*/);
   uart_init_channel(spiChannel, 1,   2400, 7/*0b111*/);
+}
+
+int uart_try_getc(size_t spiChannel, size_t uartChannel, char *out) {
+  if (uart_read_register(spiChannel, uartChannel, UART_RXLVL)) {
+    *out = uart_read_register(spiChannel, uartChannel, UART_RHR);
+    return 1;
+  }
+  return 0;
+}
+
+int uart_try_puts(size_t spiChannel, size_t uartChannel, const char* buf, size_t blen) {
+  static const size_t max = 32;
+  char temp[max];
+  temp[0] = (uartChannel << UART_CHANNEL_SHIFT) | (UART_THR << UART_ADDR_SHIFT);
+  size_t tlen = uart_read_register(spiChannel, uartChannel, UART_TXLVL);
+  if (tlen > max) {
+    tlen = max;
+  }
+  size_t bidx = 0, tidx = 1;
+  while (tidx < tlen && bidx < blen) {
+    temp[tidx++] = buf[bidx++];
+  }
+  if (bidx) {
+    spi_send_recv(spiChannel, temp, tidx, NULL, 0);
+  }
+  return bidx;
 }
 
 char uart_getc(size_t spiChannel, size_t uartChannel) {

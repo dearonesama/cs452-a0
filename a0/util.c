@@ -89,7 +89,7 @@ void queue_init(queue_t *q, char *data, size_t capacity) {
   q->end = 0;
 }
 
-void queue_emplace(queue_t *q, char *src, size_t len) {
+void queue_emplace(queue_t *q, const char *src, size_t len) {
   ASSERT(q);
   ASSERT(src);
   size_t i = 0;
@@ -216,6 +216,8 @@ train_command_t try_parse_train_command(char *buf, size_t len) {
       c.cmd.sw.straight = 0;
       c.kind = TRAIN_COMMAND_SW;
     }
+  } else if (match_start(buf, &i, len, "q", 1)) {
+      c.kind = TRAIN_COMMAND_Q;
   }
   return c;
 }

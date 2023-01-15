@@ -53,7 +53,7 @@ typedef struct {
 
 void queue_init(queue_t *, char *, size_t);
 // writes data and shifts end ptr; if it reaches the end of buffer, then write from the left
-void queue_emplace(queue_t *, char *, size_t);
+void queue_emplace(queue_t *, const char *, size_t);
 // shifts begin ptr
 void queue_consume(queue_t *, size_t);
 // gets longest contigent range of data
@@ -64,6 +64,7 @@ typedef struct {
     TRAIN_COMMAND_TR,
     TRAIN_COMMAND_RV,
     TRAIN_COMMAND_SW,
+    TRAIN_COMMAND_Q,
     TRAIN_COMMAND_INVALID,
   } kind;
   union {
