@@ -107,6 +107,10 @@ void test_train_command() {
   ASSERT(c.cmd.tr.train_num == 6);
   ASSERT(c.cmd.tr.speed = 9);
 
+  char str22[] = "tr 6 93";
+  c = try_parse_train_command(str22, BUFLEN(str22) - 1);
+  ASSERT(c.kind == TRAIN_COMMAND_INVALID);
+
   char str3[] = "rv  03";
   c = try_parse_train_command(str3, BUFLEN(str3) - 1);
   ASSERT(c.kind == TRAIN_COMMAND_RV);

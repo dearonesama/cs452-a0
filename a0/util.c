@@ -188,7 +188,7 @@ train_command_t try_parse_train_command(char *buf, size_t len) {
     }
     c.cmd.tr.train_num = num;
     eat_whitespace(buf, &i, len);
-    if (!match_two_digits(buf, &i, len, &num)) {
+    if (!match_two_digits(buf, &i, len, &num) || !((num <= 14) || (num >= 16 && num <= 30))) {
       return c;
     }
     c.cmd.tr.speed = num;
