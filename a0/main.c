@@ -165,11 +165,14 @@ static void draw_sensors(queue_t *scr_queue, sensor_elem_t *list, size_t list_id
   }
 }
 
+static const unsigned MAX_FEEDBACK_WAIT = TIMER_TICK * 10 * 5;
+
 typedef struct {
   unsigned last_it_timer, last_query_timer;
   struct perf_data_0_t {
     unsigned it, query_resp, query_resp_full;
   } rt, max;
+  char non_responding;
 } perf_data_t;
 
 static unsigned umax(unsigned a, unsigned b) {
@@ -204,6 +207,12 @@ static void draw_perf(queue_t *scr_queue, perf_data_t *perf) {
       queue_emplace_literal(scr_queue, CLRLNE);
       queue_emplace_literal(scr_queue, "MX:");
     }
+  }
+
+  queue_emplace_literal(scr_queue, "\r\n");
+  queue_emplace_literal(scr_queue, CLRLNE);
+  if (perf->non_responding) {
+    queue_emplace_literal(scr_queue, "The connection is inconsistent; you may need to restart the program (use q).");
   }
 }
 
@@ -363,19 +372,23 @@ int main() {
         }
 
         user_input_line_end = 0;
+      } else if (new_char[0] == '\b') {
+        user_input_line_end = user_input_line_end == 0 ? 0 : user_input_line_end - 1;
       } else {
         user_input_line[user_input_line_end] = new_char[0];
         ++user_input_line_end;
-        queue_emplace(&scr_queue, new_char, 1);
       }
     }
 
     // try getting something from trainset feedback
     if (uart_try_getc(0, 1, new_char)) {
       if (sensor_update.ith_byte == 0) {
+        perf.non_responding = 0;
         add_active_sensors_from_data(new_char[0], 0, sensor_update.current_alp, sensors, &sensor_list_idx);
         ++sensor_update.ith_byte;
-        perf.max.query_resp = umax(perf.max.query_resp, perf.rt.query_resp = tick2us(curr_timer - perf.last_query_timer));
+        if (sensor_update.current_alp == 'A') {
+            perf.max.query_resp = umax(perf.max.query_resp, perf.rt.query_resp = tick2us(curr_timer - perf.last_query_timer));
+        }
       } else {
         add_active_sensors_from_data(new_char[0], 8, sensor_update.current_alp, sensors, &sensor_list_idx);
         sensor_update.ith_byte = 0;
@@ -385,6 +398,17 @@ int main() {
           train_cmd_paused = 0;
           perf.max.query_resp_full = umax(perf.max.query_resp_full, perf.rt.query_resp_full = tick2us(curr_timer - perf.last_query_timer));
         }
+      }
+    } else if (train_cmd_paused && curr_timer - perf.last_query_timer >= MAX_FEEDBACK_WAIT) {
+      // if we do not receive feedback we are expecting, assume track is reset, and we reset the feeback
+      perf.non_responding = 1;
+      char cmd_buf[1] = {192};
+      if (uart_try_puts(0, 1, cmd_buf, 1)) {
+        last_train_cmd_timer = curr_timer;
+        queue_consume(&train_queue, train_queue.capacity);
+        train_cmd_paused = 0;
+        sensor_update.current_alp = 'A';
+        sensor_update.ith_byte = 0;
       }
     }
 
