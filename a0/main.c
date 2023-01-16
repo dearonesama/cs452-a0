@@ -117,6 +117,53 @@ static void draw_switches(queue_t *scr_queue, switch_status_t *switches) {
   draw_switches_row(scr_queue, switches, MAX_SWITCHES / 2, MAX_SWITCHES);
 }
 
+static const size_t MAX_SENSOR_OUT = 10;
+static const unsigned TRAIN_CMD_TIMEOUT = TIMER_TICK;
+
+typedef struct {
+  char alp, num;
+} sensor_elem_t;
+
+static void add_active_sensor(char alpha, char num, sensor_elem_t *list, size_t *list_idx) {
+  list[*list_idx].alp = alpha;
+  list[*list_idx].num = num;
+  ++*list_idx;
+  if (*list_idx == MAX_SENSOR_OUT) {
+    *list_idx = 0;
+  }
+}
+
+static void add_active_sensors_from_data(char dat, int num_offset, char alpha, sensor_elem_t *list, size_t *list_idx) {
+  // note: the track manual seems to use big endian, but the data from pi is little endian
+  // to both bytes and bits
+  for (unsigned i = 0; i < 8; ++i) {
+    if (((unsigned char)dat >> (7 - i)) & 1) {
+      add_active_sensor(alpha, i + 1 + num_offset, list, list_idx);
+    }
+  }
+}
+
+static void draw_sensors(queue_t *scr_queue, sensor_elem_t *list, size_t list_idx) {
+  queue_emplace_literal(scr_queue, "\r\n\r\nMost active sensors ");
+  char num_buf[3];
+  size_t past_idx = (list_idx == 0 ? MAX_SENSOR_OUT : list_idx)- 1;
+  for (size_t i = 0; i < MAX_SENSOR_OUT; ++i) {
+    if (!list[i].alp) {  // unfilled initializer values
+      break;
+    }
+    format_two_digits(list[i].num, num_buf);
+    if (i == past_idx) {
+      queue_emplace_literal(scr_queue, "\033[1m");
+      queue_emplace(scr_queue, &list[i].alp, 1);
+      queue_emplace(scr_queue, num_buf, 2);
+      queue_emplace_literal(scr_queue, " \033[0m ");
+    } else {
+      queue_emplace(scr_queue, &list[i].alp, 1);
+      queue_emplace(scr_queue, num_buf, 3);
+    }
+  }
+}
+
 int main() {
   init_gpio();
   init_spi(0);
@@ -130,7 +177,9 @@ int main() {
   queue_t scr_queue, train_queue;
   queue_init(&scr_queue, scrbuf, sizeof(scrbuf) / sizeof(scrbuf[0]));
   queue_init(&train_queue, trainbuf, sizeof(trainbuf) / sizeof(trainbuf[0]));
-  queue_t *queues[] = { &scr_queue, &train_queue };
+
+  int train_cmd_paused = 0;
+  unsigned last_train_cmd_timer = 0;
 
   display_clock_t clock;
   display_clock_init(&clock);
@@ -152,6 +201,15 @@ int main() {
     unsigned clock_from;
   } switch_halt = {0, 0};
 
+  sensor_elem_t sensors[MAX_SENSOR_OUT];
+  memset(sensors, 0, sizeof sensors);
+  size_t sensor_list_idx = 0;
+
+  struct {
+    char current_alp, ith_byte;
+  } sensor_update = {'A', 0};
+
+  uart_putc(0, 1, 192);
   uart_puts(0, 0, CLRSCR, sizeof CLRSCR / sizeof(CLRSCR[0]) - 1);
   uart_puts(0, 0, HIDCSR, sizeof HIDCSR / sizeof(HIDCSR[0]) - 1);
 
@@ -182,6 +240,8 @@ int main() {
 
       draw_speeds(&scr_queue, train_speeds, train_speeds_end);
       draw_switches(&scr_queue, switch_statuses);
+      draw_sensors(&scr_queue, sensors, sensor_list_idx);
+
       queue_emplace_literal(&scr_queue, "\r\n");
       queue_emplace_literal(&scr_queue, CLRLNE);
     }
@@ -263,16 +323,47 @@ int main() {
 
     // try getting something from trainset feedback
     if (uart_try_getc(0, 1, new_char)) {
-      //
+      if (sensor_update.ith_byte == 0) {
+        add_active_sensors_from_data(new_char[0], 0, sensor_update.current_alp, sensors, &sensor_list_idx);
+        ++sensor_update.ith_byte;
+      } else {
+        add_active_sensors_from_data(new_char[0], 8, sensor_update.current_alp, sensors, &sensor_list_idx);
+        sensor_update.ith_byte = 0;
+        sensor_update.current_alp += 1;
+        if (sensor_update.current_alp == 'F') {
+          sensor_update.current_alp = 'A';
+          train_cmd_paused = 0;
+        }
+      }
     }
 
-    // try putting something to screen and trains
-    for (size_t i = 0; i < 2; ++i) {
-      size_t buf_len;
-      char *buf_start = queue_longest_data(queues[i], &buf_len);
+    // try putting something to screen
+    size_t buf_len;
+    char *buf_start = queue_longest_data(&scr_queue, &buf_len);
+    if (buf_len) {
+      buf_len = uart_try_puts(0, 0, buf_start, buf_len);
+      queue_consume(&scr_queue, buf_len);
+    }
+
+    // try putting something to train
+    if (!train_cmd_paused && curr_timer - last_train_cmd_timer >= TRAIN_CMD_TIMEOUT) {
+      buf_start = queue_longest_data(&train_queue, &buf_len);
       if (buf_len) {
-        buf_len = uart_try_puts(0, i, buf_start, buf_len);
-        queue_consume(queues[i], buf_len);
+        // this is a design mistake: some commands need to wait for some time and then fire another
+        // command, but their timers are initialized when the command is pushed to the local queue,
+        // not when pushed to uart, and there is time diff between the two. ideally we want to use
+        // a generic queue to contain commands, and init the timer when the command is actually
+        // submitted here.
+        buf_len = uart_try_puts(0, 1, buf_start, buf_len);
+        queue_consume(&train_queue, buf_len);
+        last_train_cmd_timer = curr_timer;
+      } else if (sensor_update.current_alp == 'A' && sensor_update.ith_byte == 0) {
+        // if there is no command to send and feedback is done, request feedback
+        char cmd_buf[1] = {128+5};
+        if (uart_try_puts(0, 1, cmd_buf, 1)) {
+          train_cmd_paused = 1;
+          last_train_cmd_timer = curr_timer;
+        }
       }
     }
   }
