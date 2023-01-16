@@ -36,7 +36,7 @@ static void test_queue_t() {
 
   char *dat;
   size_t len;
-  queue_emplace(&q, "a", 1);
+  queue_emplace_literal(&q, "a");
   // a-------
 
 #define QLDASSERT(s)                                   \
@@ -48,7 +48,7 @@ static void test_queue_t() {
 
   QLDASSERT("a");
 
-  queue_emplace(&q, "bc", 2);
+  queue_emplace_literal(&q, "bc");
   // abc----
   QLDASSERT("abc");
 
@@ -56,11 +56,11 @@ static void test_queue_t() {
   // --c----
   QLDASSERT("c");
 
-  queue_emplace(&q, "defg", 4);
+  queue_emplace_literal(&q, "defg");
   // --cdefg
   QLDASSERT("cdefg");
 
-  queue_emplace(&q, "h", 1);
+  queue_emplace_literal(&q, "h");
   // h-cdefg
   QLDASSERT("cdefg");
 
@@ -68,13 +68,13 @@ static void test_queue_t() {
   // h-----g
   QLDASSERT("g");
 
-  queue_emplace(&q, "ij", 2);
+  queue_emplace_literal(&q, "ij");
   // hij---g
   queue_consume(&q, 1);
   // hij----
   QLDASSERT("hij");
 
-  queue_emplace(&q, "klmx", 3);
+  queue_emplace_literal(&q, "klm");
   // hijklm-
   QLDASSERT("hijklm");
 
@@ -82,7 +82,7 @@ static void test_queue_t() {
   // ----lm-
   QLDASSERT("lm");
 
-  queue_emplace(&q, "nop", 3);
+  queue_emplace_literal(&q, "nop");
   // op--lmn
   queue_consume(&q, 4);
   // -p-----
@@ -127,6 +127,12 @@ void test_train_command() {
   ASSERT(c.kind == TRAIN_COMMAND_SW);
   ASSERT(c.cmd.sw.switch_num == 1);
   ASSERT(!c.cmd.sw.straight);
+
+  char str6[] = "sw 153 S";
+  c = try_parse_train_command(str6, BUFLEN(str6) - 1);
+  ASSERT(c.kind == TRAIN_COMMAND_SW);
+  ASSERT(c.cmd.sw.switch_num == 153);
+  ASSERT(c.cmd.sw.straight);
 
   c = try_parse_train_command("q", 1);
   ASSERT(c.kind == TRAIN_COMMAND_Q);

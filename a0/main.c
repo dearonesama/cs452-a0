@@ -26,6 +26,10 @@ static const unsigned TRAIN_ACCELERATION[] = {
 static const unsigned MAX_TRAINS = 99;
 
 static const char CLRSCR[] = "\033[1;1H\033[2J";
+static const char MOVSCR[] = "\033[;H";
+static const char CLRLNE[] = "\033[2K\r";
+static const char HIDCSR[] = "\033[?25l";
+static const char SHWCSR[] = "\033[?25h";
 
 typedef struct {
   char number;
@@ -39,13 +43,13 @@ static void format_two_digits(unsigned num, char *out) {
 }
 
 static void draw_speeds(queue_t *scr_queue, train_speed_elem_t *train_speeds, size_t train_speeds_end) {
-  queue_emplace(scr_queue, "\r\n\r\nTrain # ", 12);
+  queue_emplace_literal(scr_queue, "\r\n\r\nTrain # ");
   char num_buf[3];
   for (size_t i = 0; i < train_speeds_end; ++i) {
     format_two_digits(train_speeds[i].number, num_buf);
     queue_emplace(scr_queue, num_buf, 3);
   }
-  queue_emplace(scr_queue, "\r\nSpeed   ", 10);
+  queue_emplace_literal(scr_queue, "\r\nSpeed   ");
   for (size_t i = 0; i < train_speeds_end; ++i) {
     format_two_digits(train_speeds[i].speed, num_buf);
     queue_emplace(scr_queue, num_buf, 3);
@@ -70,6 +74,47 @@ static void update_train_speed(char number, char speed, train_speed_elem_t *trai
     train_speeds[*train_speeds_end].speed = speed;
     ++*train_speeds_end;
   }
+}
+
+static const unsigned MAX_SWITCHES = 22;
+static const unsigned SWITCH_TIMEOUT = TIMER_TICK * 3;
+
+typedef char switch_status_t;
+
+static size_t switch2idx(size_t i) {
+  return ((i) < 19 ? ((i)-1) : ((i)-135));
+}
+
+static size_t idx2switch(size_t i) {
+  return i < 18 ? i + 1 : i + 135;
+}
+
+static void format_three_digits(unsigned num, char *out) {
+  out[0] = '0' + (num / 100);
+  out[1] = '0' + (num / 10 % 10);
+  out[2] = '0' + (num % 10);
+  out[3] = ' ';
+}
+
+static void draw_switches_row(queue_t *scr_queue, switch_status_t *switches, size_t start, size_t end) {
+  queue_emplace_literal(scr_queue, "\r\nSwitch # ");
+  char num_buf[4];
+  for (size_t i = start; i < end; ++i) {
+    format_three_digits(idx2switch(i), num_buf);
+    queue_emplace(scr_queue, num_buf, 4);
+  }
+  queue_emplace_literal(scr_queue, "\r\nStatus   ");
+  num_buf[0] = num_buf[2] = num_buf[3] = ' ';
+  for (size_t i = start; i < end; ++i) {
+    num_buf[1] = switches[i];
+    queue_emplace(scr_queue, num_buf, 4);
+  }
+}
+
+static void draw_switches(queue_t *scr_queue, switch_status_t *switches) {
+  queue_emplace_literal(scr_queue, "\r\n");
+  draw_switches_row(scr_queue, switches, 0, MAX_SWITCHES / 2);
+  draw_switches_row(scr_queue, switches, MAX_SWITCHES / 2, MAX_SWITCHES);
 }
 
 int main() {
@@ -99,8 +144,19 @@ int main() {
     unsigned clock_from;
   } reversal = {0, 0, 0, 0};
 
+  switch_status_t switch_statuses[22]; // 1-18, 153-156
+  memset(switch_statuses, '?', sizeof switch_statuses);
+
+  struct {
+    char waiting;
+    unsigned clock_from;
+  } switch_halt = {0, 0};
+
+  uart_puts(0, 0, CLRSCR, sizeof CLRSCR / sizeof(CLRSCR[0]) - 1);
+  uart_puts(0, 0, HIDCSR, sizeof HIDCSR / sizeof(HIDCSR[0]) - 1);
+
   while (1) {
-    int blocked = reversal.waiting;
+    int blocked = reversal.waiting || switch_halt.waiting;
     // timer updates redraw the screen
     unsigned curr_timer = *TIMER_CLO;
     if (curr_timer - last_redraw_timer >= TIMER_TICK) {
@@ -108,21 +164,26 @@ int main() {
       display_clock_advance(&clock);
       char clock_buf[10];
       int clen = display_clock_sprint(&clock, clock_buf);
-      queue_emplace(&scr_queue, CLRSCR, sizeof(CLRSCR) / sizeof(CLRSCR[0]) - 1);
-      queue_emplace(&scr_queue, "T R A I N S\r\nSystem uptime: ", 28);
+      queue_consume(&scr_queue, sizeof scrbuf / sizeof(scrbuf[0]));
+      queue_emplace_literal(&scr_queue, MOVSCR);
+      queue_emplace_literal(&scr_queue, "T R A I N S\r\nSystem uptime: ");
       queue_emplace(&scr_queue, clock_buf, clen);
 
-      queue_emplace(&scr_queue, "\r\nCommand> ", 11);
+      queue_emplace_literal(&scr_queue, "\r\n");
+      queue_emplace_literal(&scr_queue, CLRLNE);
+      queue_emplace_literal(&scr_queue, "Command> ");
 
       if (blocked) {
-        queue_emplace(&scr_queue, "(in progress)", 13);
+        queue_emplace_literal(&scr_queue, "(in progress)");
       } else {
         queue_emplace(&scr_queue, user_input_line, user_input_line_end);
-        queue_emplace(&scr_queue, "_", 1);
+        queue_emplace_literal(&scr_queue, "_");
       }
 
       draw_speeds(&scr_queue, train_speeds, train_speeds_end);
-      queue_emplace(&scr_queue, "\r\n", 2);
+      draw_switches(&scr_queue, switch_statuses);
+      queue_emplace_literal(&scr_queue, "\r\n");
+      queue_emplace_literal(&scr_queue, CLRLNE);
     }
 
     // submit pending re-acceleration if applicable
@@ -140,6 +201,13 @@ int main() {
       cmd_buf[0] = reversal.speed;
       cmd_buf[1] = reversal.number;
       queue_emplace(&train_queue, cmd_buf, 2);
+    }
+
+    // cancel solenoids after turnouts if applicable
+    if (switch_halt.waiting && curr_timer - switch_halt.clock_from >= SWITCH_TIMEOUT) {
+      switch_halt.waiting = 0;
+      char cmd_buf[1] = {32};
+      queue_emplace(&train_queue, cmd_buf, 1);
     }
 
     // try getting something from screen
@@ -171,6 +239,12 @@ int main() {
           break;
         }
         case TRAIN_COMMAND_SW:
+          switch_statuses[switch2idx(c.cmd.sw.switch_num)] = c.cmd.sw.straight ? 'S' : 'C';
+          switch_halt.waiting = 1;
+          switch_halt.clock_from = curr_timer;
+          cmd_buf[0] = c.cmd.sw.straight ? 33 : 34;
+          cmd_buf[1] = c.cmd.sw.switch_num;
+          queue_emplace(&train_queue, cmd_buf, 2);
           break;
         case TRAIN_COMMAND_Q:
           goto end;
@@ -187,6 +261,11 @@ int main() {
       }
     }
 
+    // try getting something from trainset feedback
+    if (uart_try_getc(0, 1, new_char)) {
+      //
+    }
+
     // try putting something to screen and trains
     for (size_t i = 0; i < 2; ++i) {
       size_t buf_len;
@@ -200,5 +279,6 @@ int main() {
 
 end:
   uart_puts(0, 0, "\r\n", 2);
+  uart_puts(0, 0, SHWCSR, sizeof SHWCSR / sizeof(SHWCSR[0]) - 1);
   return 0;
 }

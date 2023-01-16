@@ -48,23 +48,6 @@ int display_clock_sprint(display_clock_t *cl, char *buf) {
   return 9;
 }
 
-static int itoa(unsigned value, char *ptr)
-{
-  ASSERT(ptr);
-  int count = 0, temp;
-  if (value == 0) {
-      *ptr = '0';
-      return 1;
-  }
-  for (temp = value; temp > 0; temp /= 10, ptr++);
-  *ptr='\0';
-  for (temp = value; temp > 0; temp /= 10) {
-      *--ptr = temp % 10 + '0';
-      ++count;
-  }
-  return count;
-}
-
 // define our own memset to avoid SIMD instructions emitted from the compiler
 void *memset(void *s, int c, size_t n) {
   for (char* it = (char*)s; n > 0; --n) *it++ = c;
@@ -137,13 +120,17 @@ static int isnum(char c) {
   return c >= '0' && c <= '9';
 }
 
-static int match_two_digits(char *buf, size_t *i, size_t len, unsigned char *out) {
+static int match_two_digits(char *buf, size_t *i, size_t len, unsigned char *out, int three_ok) {
   ASSERT(buf);
   ASSERT(out);
   if (!len) {
     return 0;
   }
-  if (isnum(buf[*i]) && (len-*i == 1 || !isnum(buf[*i+1]))) {
+  if (three_ok && len-*i >= 3 && isnum(buf[*i]) && isnum(buf[*i+1]) && isnum(buf[*i+2])) {
+    *out = (buf[*i] - '0') * 100 + (buf[*i+1] - '0') * 10 + (buf[*i+2] - '0');
+    *i += 3;
+    return 1;
+  } else if (isnum(buf[*i]) && (len-*i == 1 || !isnum(buf[*i+1]))) {
     *out = buf[*i] - '0';
     ++*i;
     return 1;
@@ -183,12 +170,12 @@ train_command_t try_parse_train_command(char *buf, size_t len) {
   eat_whitespace(buf, &i, len);
   if (match_start(buf, &i, len, "tr", 2)) {
     eat_whitespace(buf, &i, len);
-    if (!match_two_digits(buf, &i, len, &num)) {
+    if (!match_two_digits(buf, &i, len, &num, 0)) {
       return c;
     }
     c.cmd.tr.train_num = num;
     eat_whitespace(buf, &i, len);
-    if (!match_two_digits(buf, &i, len, &num) || !((num <= 14) || (num >= 16 && num <= 30))) {
+    if (!match_two_digits(buf, &i, len, &num, 0) || !((num <= 14) || (num >= 16 && num <= 30))) {
       return c;
     }
     c.cmd.tr.speed = num;
@@ -196,7 +183,7 @@ train_command_t try_parse_train_command(char *buf, size_t len) {
 
   } else if (match_start(buf, &i, len, "rv", 2)) {
     eat_whitespace(buf, &i, len);
-    if (!match_two_digits(buf, &i, len, &num)) {
+    if (!match_two_digits(buf, &i, len, &num, 0)) {
       return c;
     }
     c.cmd.rv.train_num = num;
@@ -204,7 +191,7 @@ train_command_t try_parse_train_command(char *buf, size_t len) {
 
   } else if (match_start(buf, &i, len, "sw", 2)) {
     eat_whitespace(buf, &i, len);
-    if (!match_two_digits(buf, &i, len, &num)) {
+    if (!match_two_digits(buf, &i, len, &num, 1)) {
       return c;
     }
     c.cmd.sw.switch_num = num;

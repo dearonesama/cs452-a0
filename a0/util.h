@@ -59,6 +59,8 @@ void queue_consume(queue_t *, size_t);
 // gets longest contigent range of data
 char *queue_longest_data(queue_t *, size_t *);
 
+#define queue_emplace_literal(q, s) queue_emplace(q, s, sizeof s / sizeof(s[0]) - 1)
+
 typedef struct {
   enum {
     TRAIN_COMMAND_TR,
