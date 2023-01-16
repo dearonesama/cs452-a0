@@ -2,6 +2,23 @@
 
 #define ASSERT(x)  // TODO
 
+// source: https://stackoverflow.com/a/32213487
+int utoa(unsigned value, char *ptr) {
+  ASSERT(ptr);
+  int count = 0, temp;
+  if (value == 0) {
+      *ptr = '0';
+      return 1;
+  }
+  for (temp = value; temp > 0; temp /= 10, ptr++);
+  *ptr = '\0';
+  for (temp = value; temp > 0; temp /= 10) {
+      *--ptr = temp % 10 + '0';
+      ++count;
+  }
+  return count;
+}
+
 void display_clock_init(display_clock_t *cl) {
   ASSERT(cl);
   cl->min = cl->sec = cl->tenth = 0;

@@ -2,6 +2,8 @@
 
 #include <stddef.h>
 
+int utoa(unsigned value, char *ptr);
+
 typedef struct {
   unsigned min;
   unsigned char sec, tenth;

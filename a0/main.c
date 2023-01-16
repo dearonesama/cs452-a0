@@ -1,8 +1,9 @@
 #include "rpi.h"
 #include "util.h"
 
+static const unsigned TIMER_FREQ = 1000000;
 static const unsigned *TIMER_CLO = (unsigned *)(0xfe003000 + 0x04);
-static const unsigned TIMER_TICK = 1000000 / 10;  // 1 mhz => .1 s every tick
+static const unsigned TIMER_TICK = TIMER_FREQ / 10;  // 1 mhz => .1 s every tick
 static const unsigned TIMER_TICK_NEAREST_ROUND = 4294900000;
 
 static const unsigned TRAIN_SOLENOID_TIMEOUT = TIMER_TICK * 3;
@@ -164,6 +165,48 @@ static void draw_sensors(queue_t *scr_queue, sensor_elem_t *list, size_t list_id
   }
 }
 
+typedef struct {
+  unsigned last_it_timer, last_query_timer;
+  struct perf_data_0_t {
+    unsigned it, query_resp, query_resp_full;
+  } rt, max;
+} perf_data_t;
+
+static unsigned umax(unsigned a, unsigned b) {
+  return a > b ? a : b;
+}
+
+static unsigned tick2us(unsigned a) {
+  return a * 1000000 / TIMER_FREQ;
+}
+
+static void draw_perf(queue_t *scr_queue, perf_data_t *perf) {
+  struct perf_data_0_t lst[] = {perf->rt, perf->max};
+  char num_buf[20];
+  queue_emplace_literal(scr_queue, "\r\n\r\n");
+  queue_emplace_literal(scr_queue, CLRLNE);
+  queue_emplace_literal(scr_queue, "RT:");
+
+  for (size_t i = 0; i < 2; ++i) {
+    queue_emplace_literal(scr_queue, " IT ");
+    size_t len = utoa(lst[i].it, num_buf);
+    queue_emplace(scr_queue, num_buf, len); 
+    queue_emplace_literal(scr_queue, " FB ");
+    len = utoa(lst[i].query_resp, num_buf);
+    queue_emplace(scr_queue, num_buf, len);
+    queue_emplace_literal(scr_queue, " FF ");
+    len = utoa(lst[i].query_resp_full, num_buf);
+    queue_emplace(scr_queue, num_buf, len);
+    queue_emplace_literal(scr_queue, " us");
+
+    if (i == 0) {
+      queue_emplace_literal(scr_queue, "\r\n");
+      queue_emplace_literal(scr_queue, CLRLNE);
+      queue_emplace_literal(scr_queue, "MX:");
+    }
+  }
+}
+
 int main() {
   init_gpio();
   init_spi(0);
@@ -205,9 +248,14 @@ int main() {
   memset(sensors, 0, sizeof sensors);
   size_t sensor_list_idx = 0;
 
+  // keeps track of incoming (5*16) feedback bytes
   struct {
     char current_alp, ith_byte;
   } sensor_update = {'A', 0};
+
+  perf_data_t perf;
+  memset(&perf, 0, sizeof perf);
+  perf.last_it_timer = *TIMER_CLO;
 
   uart_putc(0, 1, 192);
   uart_puts(0, 0, CLRSCR, sizeof CLRSCR / sizeof(CLRSCR[0]) - 1);
@@ -241,6 +289,7 @@ int main() {
       draw_speeds(&scr_queue, train_speeds, train_speeds_end);
       draw_switches(&scr_queue, switch_statuses);
       draw_sensors(&scr_queue, sensors, sensor_list_idx);
+      draw_perf(&scr_queue, &perf);
 
       queue_emplace_literal(&scr_queue, "\r\n");
       queue_emplace_literal(&scr_queue, CLRLNE);
@@ -326,6 +375,7 @@ int main() {
       if (sensor_update.ith_byte == 0) {
         add_active_sensors_from_data(new_char[0], 0, sensor_update.current_alp, sensors, &sensor_list_idx);
         ++sensor_update.ith_byte;
+        perf.max.query_resp = umax(perf.max.query_resp, perf.rt.query_resp = tick2us(curr_timer - perf.last_query_timer));
       } else {
         add_active_sensors_from_data(new_char[0], 8, sensor_update.current_alp, sensors, &sensor_list_idx);
         sensor_update.ith_byte = 0;
@@ -333,6 +383,7 @@ int main() {
         if (sensor_update.current_alp == 'F') {
           sensor_update.current_alp = 'A';
           train_cmd_paused = 0;
+          perf.max.query_resp_full = umax(perf.max.query_resp_full, perf.rt.query_resp_full = tick2us(curr_timer - perf.last_query_timer));
         }
       }
     }
@@ -363,9 +414,13 @@ int main() {
         if (uart_try_puts(0, 1, cmd_buf, 1)) {
           train_cmd_paused = 1;
           last_train_cmd_timer = curr_timer;
+          perf.last_query_timer = curr_timer;
         }
       }
     }
+
+    perf.max.it = umax(perf.max.it, perf.rt.it = tick2us(curr_timer - perf.last_it_timer));
+    perf.last_it_timer = curr_timer;
   }
 
 end:
